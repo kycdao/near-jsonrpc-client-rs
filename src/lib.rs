@@ -124,6 +124,7 @@ pub mod header;
 pub mod methods;
 
 use errors::*;
+use serde::de::Error;
 
 pub const NEAR_MAINNET_RPC_URL: &str = "https://rpc.mainnet.near.org";
 pub const NEAR_TESTNET_RPC_URL: &str = "https://rpc.testnet.near.org";
@@ -257,7 +258,25 @@ impl JsonRpcClient {
         })?;
 
         if let Message::Response(response) = response_message {
-            return methods::RpcHandlerResponse::parse(response.result?).map_err(|err| {
+
+            let rpc_result = response.result?;
+
+            // handling of an unstructured error response (caused by https://github.com/near/nearcore/issues/6384 )
+            if let Some(result_object) = rpc_result.as_object() {
+                if let Some(error_value) = result_object.get("error") {
+                    if let Some(error_message) = error_value.as_str() {
+                        if error_message.starts_with("wasm execution failed with error") {
+                            return Err(JsonRpcError::TransportError(RpcTransportError::RecvError(
+                                JsonRpcTransportRecvError::ResponseParseError(
+                                    JsonRpcTransportHandlerResponseError::ErrorMessageParseError(serde_json::Error::custom(error_message)),
+                                ),
+                            )));
+                        }
+                    }
+                }
+            }
+
+            return methods::RpcHandlerResponse::parse(rpc_result).map_err(|err| {
                 JsonRpcError::TransportError(RpcTransportError::RecvError(
                     JsonRpcTransportRecvError::ResponseParseError(
                         JsonRpcTransportHandlerResponseError::ResultParseError(err),
